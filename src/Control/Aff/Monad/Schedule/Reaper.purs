@@ -99,38 +99,40 @@ addItem
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
   -> item
   -> Aff (ScheduleEff eff) Unit
-addItem lock settings@(ReaperSetting rset) stateRef tidRef item = withAVar lock \_ -> do
-  next <- liftEff $ modifyRef' stateRef cons
+addItem lock settings@(ReaperSetting rset) stateRef tidRef item = do
+  next <- withAVar lock \_ -> liftEff $ modifyRef' stateRef cons
   next
   where
   cons NoReaper =
     let wl = rset.cons item rset.empty
-    in { state: Workload wl, value: spawn settings stateRef tidRef }
+    in { state: Workload wl, value: spawn lock settings stateRef tidRef }
   cons (Workload wl) =
     let wl' = rset.cons item wl
     in { state: Workload wl', value: pure unit }
 
 spawn
   :: forall eff workload item
-   . ReaperSetting (ScheduleEff eff) workload item
+   . AVar Unit
+  -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
   -> Aff (ScheduleEff eff) Unit
-spawn settings stateRef tidRef = do
-  canc <- forkAff $ reaper settings stateRef tidRef
+spawn lock settings stateRef tidRef = do
+  canc <- forkAff $ reaper lock settings stateRef tidRef
   liftEff $ writeRef tidRef $ Just canc
 
 reaper
   :: forall eff workload item
-   . ReaperSetting (ScheduleEff eff) workload item
+   . AVar Unit
+  -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
   -> Aff (ScheduleEff eff) Unit
-reaper settings@(ReaperSetting rec) stateRef tidRef = do
+reaper lock settings@(ReaperSetting rec) stateRef tidRef = do
   _     <- delay rec.delay
-  wl    <- liftEff $ modifyRef' stateRef (\s -> unsafePartial $ swapWithEmpty s)
+  wl    <- withAVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ swapWithEmpty s)
   merge <- rec.action wl
-  next  <- liftEff $ modifyRef' stateRef (\s -> unsafePartial $ check merge s)
+  next  <- withAVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ check merge s)
   next
   where
   swapWithEmpty :: Partial => State workload -> { state :: State workload, value :: workload }
@@ -145,7 +147,7 @@ reaper settings@(ReaperSetting rec) stateRef tidRef = do
     in
       if rec.isNull wl
         then { state: NoReaper, value: liftEff $ writeRef tidRef Nothing }
-        else { state: Workload wl', value: reaper settings stateRef tidRef }
+        else { state: Workload wl', value: reaper lock settings stateRef tidRef }
 
 mkListAction
   :: forall eff item item'

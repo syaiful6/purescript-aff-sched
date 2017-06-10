@@ -10,7 +10,7 @@ import Control.Monad.Eff.Ref (Ref, newRef, readRef, modifyRef', modifyRef)
 
 import Control.Monad.Aff.Schedule.Effects (ScheduleEff)
 import Control.Monad.Aff.Schedule.AutoUpdate (mkAutoUpdate, UpdateSettings(..))
-import Control.Monad.Aff.Schedule.Reaper (ReaperSetting(..), mkReaper, mkListAction, reaperAdd, reaperRead)
+import Control.Monad.Aff.Schedule.Reaper (ReaperSetting(..), mkReaper, mkListAction, reaperAdd)
 
 import Data.Newtype (wrap)
 import Data.List (List(Nil), (..), (:), null)
@@ -52,10 +52,8 @@ testReaper = do
       when (actual /= expected) do
         liftEff $ log ("someting wrong happened, expected: " <> show expected <> ", but got " <> show actual)
   testCases <- traverse mkTestCase is
-  delay (wrap 10000.00)
+  delay (wrap 2000.00)
   for_ testCases test
-  ds <- reaperRead reaper
-  pure unit
 
 testAutoUpdate :: forall e. Aff (TestEff e) Unit
 testAutoUpdate = do
@@ -69,7 +67,7 @@ testAutoUpdate = do
     j <- next
     when (i == j && i /= 1) do
       liftEff $ log "someting wrong happened"
-  delay (wrap 6000.00)
+  delay (wrap 3000.00)
   last1 <- liftEff $ readRef ref
   delay (wrap 2000.00)
   last2 <- liftEff $ readRef ref
