@@ -4,9 +4,9 @@ import Prelude
 
 import Control.Monad.Aff (Aff, forkAff, delay, cancel, attempt)
 import Control.Monad.Aff.Console (CONSOLE, log)
-import Control.Monad.Aff.MVar (AVAR, MVar, newEmptyMVar, putMVar, takeMVar, killMVar)
+import Control.Monad.Aff.MVar (AVAR, newEmptyMVar, putMVar, takeMVar, killMVar)
 import Control.Monad.Error.Class (throwError)
-import Control.Monad.Eff.Exception (throwException, error)
+import Control.Monad.Eff.Exception (throwException)
 import Control.Monad.Rec.Class (forever)
 
 import Data.Either (either)

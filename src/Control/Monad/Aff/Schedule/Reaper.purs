@@ -12,9 +12,8 @@ module Control.Monad.Aff.Schedule.Reaper
 import Prelude
 
 import Control.Monad.Aff (Aff, Canceler, cancel, forkAff, delay)
-import Control.Monad.Aff.AVar (AVAR, AVar, takeVar, putVar, makeVar')
+import Control.Monad.Aff.MVar (MVar, newMVar, withMVar)
 import Control.Monad.Eff.Class (liftEff)
-import Control.Monad.Error.Class (throwError, catchError)
 import Control.Monad.Eff.Exception (error)
 import Control.Monad.Eff.Ref (Ref, newRef, writeRef, readRef, modifyRef')
 
@@ -68,7 +67,7 @@ mkReaper
 mkReaper settings@(ReaperSetting rset) = do
   stateRef <- liftEff $ newRef NoReaper
   tidRef   <- liftEff $ newRef Nothing
-  lock     <- makeVar' unit
+  lock     <- newMVar unit
   pure $ Reaper
     { add: addItem lock settings stateRef tidRef
     , read: readState stateRef
@@ -81,7 +80,7 @@ mkReaper settings@(ReaperSetting rset) = do
     case mx of
       NoReaper    -> pure rset.empty
       Workload wl -> pure wl
-  stop lock stateRef = withAVar lock \_ -> do
+  stop lock stateRef = withMVar lock \_ -> do
     liftEff $ modifyRef' stateRef \mx -> case mx of
       NoReaper   -> { state: NoReaper, value: rset.empty }
       Workload x -> { state: Workload rset.empty, value: x }
@@ -93,14 +92,14 @@ mkReaper settings@(ReaperSetting rset) = do
 
 addItem
   :: forall eff workload item
-   . AVar Unit
+   . MVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
   -> item
   -> Aff (ScheduleEff eff) Unit
 addItem lock settings@(ReaperSetting rset) stateRef tidRef item = do
-  next <- withAVar lock \_ -> liftEff $ modifyRef' stateRef cons
+  next <- withMVar lock \_ -> liftEff $ modifyRef' stateRef cons
   next
   where
   cons NoReaper =
@@ -112,7 +111,7 @@ addItem lock settings@(ReaperSetting rset) stateRef tidRef item = do
 
 spawn
   :: forall eff workload item
-   . AVar Unit
+   . MVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
@@ -123,16 +122,16 @@ spawn lock settings stateRef tidRef = do
 
 reaper
   :: forall eff workload item
-   . AVar Unit
+   . MVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
   -> Aff (ScheduleEff eff) Unit
 reaper lock settings@(ReaperSetting rec) stateRef tidRef = do
   _     <- delay rec.delay
-  wl    <- withAVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ swapWithEmpty s)
+  wl    <- withMVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ swapWithEmpty s)
   merge <- rec.action wl
-  next  <- withAVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ check merge s)
+  next  <- withMVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ check merge s)
   next
   where
   swapWithEmpty :: Partial => State workload -> { state :: State workload, value :: workload }
@@ -165,9 +164,3 @@ mkListAction f = go id
           Nothing -> front
           Just y  -> front <<< (y : _)
     go front' xs
-
-withAVar :: forall e a b. AVar a -> (a -> Aff (avar :: AVAR | e) b) -> Aff (avar :: AVAR | e) b
-withAVar v aff = do
-  a <- takeVar v
-  b <- aff a `catchError` \e -> putVar v a *> throwError e
-  putVar v a *> pure b

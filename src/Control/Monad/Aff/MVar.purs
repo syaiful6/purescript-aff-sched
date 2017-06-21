@@ -17,7 +17,7 @@ module Control.Monad.Aff.MVar
 
 import Prelude
 
-import Control.Monad.Aff (Aff, nonCanceler)
+import Control.Monad.Aff (nonCanceler)
 import Control.Monad.Aff.AVar (AVAR, AffAVar)
 import Control.Monad.Eff.Exception (Error)
 import Control.Monad.Error.Class (throwError, catchError)
@@ -58,6 +58,9 @@ tryPutMVar mv a = runFn3 _tryPutMVar nonCanceler mv a
 readMVar :: forall eff a. MVar a -> AffAVar eff a
 readMVar mv = runFn2 _readMVar nonCanceler mv
 
+-- | Take a value from an 'MVar', put a new value into the 'MVar' and
+-- | return the value taken. This function is atomic only if there are
+-- | no other producers for this 'MVar'.
 swapMVar :: forall eff a. MVar a -> a -> AffAVar eff a
 swapMVar mv new = do
   old <- takeMVar mv

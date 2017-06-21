@@ -135,7 +135,7 @@ function createWriter(success, error, value) {
 
 function notifyMVarFull(mv, val) {
   if (mv.waiters && mv.waiters.length > 0) {
-    var l = mv._waiters.length
+    var l = mv.waiters.length
     for (var i = 0; i < l; i++) {
       mv.waiters[i].success(val)
     }
@@ -232,8 +232,8 @@ exports._tryPutMVar = function (nonCanceler, mv, val) {
     } else if (_isFull(mv)) {
       success(false)
     } else {
-      success(true)
       notifyMVarFull(mv, val)
+      success(true)
     }
     return nonCanceler;
   }
