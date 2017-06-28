@@ -97,18 +97,17 @@ Queue.prototype.iter = function () {
 }
 
 function Sentinel() {}
-var sentinel = new Sentinel()
 
 function MVar() {
   this.readers = new Queue()
   this.writers = new Queue()
   this.waiters  = undefined
-  this.val      = sentinel
+  this.val      = new Sentinel()
   this.error    = undefined
 }
 
 function _isFull (mv) {
-  return mv.val !== sentinel
+  return ! (mv.val instanceof Sentinel)
 }
 
 exports._makeMVar = function (nonCanceler) {
@@ -145,7 +144,7 @@ function notifyMVarFull(mv, val) {
   var reader = mv.readers.dequeue()
   if (reader) {
     reader.success(val)
-    mv.val = sentinel
+    mv.val = new Sentinel()
   } else {
     // no reader
     mv.val = val
@@ -158,7 +157,7 @@ function notifyMVarEmpty(mv) {
     mv.val = writer.value
     writer.success()
   } else {
-    mv.val = sentinel
+    mv.val = new Sentinel()
   }
 }
 
