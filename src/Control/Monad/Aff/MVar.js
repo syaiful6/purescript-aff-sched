@@ -14,10 +14,8 @@ function Queue() {
 
 function createBlock(o) {
   var b = Object.create(null)
-  if (!o) {
-    b.b = []
-  } else {
-    b.b = [o]
+  if (o) {
+    b[0] = o
   }
   b.n = null
   return b
@@ -51,16 +49,16 @@ Queue.prototype.enqueue = function (o) {
     this._last = newBlock
     this._lp = 1
   } else {
-    this._last.b[this._lp++] = o
+    this._last[this._lp++] = o
   }
 }
 
 Queue.prototype.dequeue = function () {
   if (this._blocks === 1 && this._fp >= this._lp) return null
-  var qfb = this._first.b, r = qfb[this._fp]
+  var qfb = this._first, r = qfb[this._fp]
   qfb[this._fp] = null
   if (++this._fp === QUEUE_BLOCK_SIZE) {
-    if(this._blocks === 1) {
+    if (this._blocks === 1) {
       this._lp = 0;
     } else {
       this._blocks--;
@@ -80,7 +78,7 @@ function _queueIterator(queue) {
       if (b === null || (b === lb && bp >= lp)) {
         return { done: true }
       } else {
-        var r = b.b[bp]
+        var r = b[bp]
         if (++bp === QUEUE_BLOCK_SIZE) {
           b = b.n
           bp = 0
@@ -96,18 +94,53 @@ Queue.prototype.iter = function () {
   return _queueIterator(this)
 }
 
-function Sentinel() {}
+const MVAR_EMPTY  = 1 << 0
+const MVAR_FULL   = 1 << 1
+const MVAR_KILLED = 1 << 2
 
 function MVar() {
   this.readers = new Queue()
   this.writers = new Queue()
-  this.waiters  = undefined
-  this.val      = new Sentinel()
-  this.error    = undefined
+  this.waiters = 0
+  this.val     = undefined
+  this._state  = 0
+  _setMVarEmpty(this)
 }
 
-function _isFull (mv) {
-  return ! (mv.val instanceof Sentinel)
+function _isMVarFull (mv) {
+  return (mv._state & MVAR_FULL) !== 0
+}
+
+function _setMVarValue (mv, value) {
+  mv._state = mv._state | MVAR_FULL
+  mv.val = value
+}
+
+function _unsetMVarFull (mv) {
+  mv._state = mv._state & (~MVAR_FULL)
+  mv.val = undefined
+}
+
+function _isMVarEmpty (mv) {
+  return (mv._state & MVAR_EMPTY) !== 0
+}
+
+function _setMVarEmpty(mv) {
+  mv._state = mv._state | MVAR_EMPTY
+  mv.val = undefined
+}
+
+function _unsetMVarEmpty(mv) {
+  mv._state = mv._state & (~MVAR_EMPTY)
+}
+
+function _isMVarKilled(mv) {
+  return (mv._state & MVAR_KILLED) !== 0
+}
+
+function _setMVarKilled(mv, err) {
+  mv._state = mv._state | MVAR_KILLED
+  mv.val = err
 }
 
 exports._makeMVar = function (nonCanceler) {
@@ -132,40 +165,63 @@ function createWriter(success, error, value) {
   return w
 }
 
-function notifyMVarFull(mv, val) {
-  if (mv.waiters && mv.waiters.length > 0) {
-    var l = mv.waiters.length
+function _queueWaiter(waiter, mv) {
+  var i = this.waiters
+  mv.waiters++
+  mv[i] = waiter
+}
+
+function _wakeUpWaiters(mv, val) {
+  if (mv.waiters > 0) {
+    var l = mv.waiters
     for (var i = 0; i < l; i++) {
-      mv.waiters[i].success(val)
+      mv[i].success(val)
+      mv[i] = undefined
     }
-    mv.waiters = undefined
+    mv.waiters = 0
   }
+}
+
+function notifyMVarFull(mv, val) {
+  _wakeUpWaiters(mv, val)
   // wake up one reader
   var reader = mv.readers.dequeue()
   if (reader) {
+    if (_isMVarFull(mv)) {
+      _unsetMVarFull(mv)
+    }
+    _setMVarEmpty(mv)
     reader.success(val)
-    mv.val = new Sentinel()
   } else {
     // no reader
-    mv.val = val
+    if (_isMVarEmpty(mv)) {
+      _unsetMVarEmpty(mv)
+    }
+    _setMVarValue(mv, val)
   }
 }
 
 function notifyMVarEmpty(mv) {
   var writer = mv.writers.dequeue()
   if (writer) {
-    mv.val = writer.value
+    if (_isMVarEmpty(mv)) {
+      _unsetMVarEmpty(mv)
+    }
+    _setMVarValue(mv, writer.value)
     writer.success()
   } else {
-    mv.val = new Sentinel()
+    if (_isMVarFull(mv)) {
+      _unsetMVarFull(mv)
+    }
+    _setMVarEmpty(mv)
   }
 }
 
 exports._takeMVar = function (nonCanceler, mv) {
   return function (success, error) {
-    if (mv.error !== undefined) {
-      error(mv.error)
-    } else if (_isFull(mv)) {
+    if (_isMVarKilled(mv)) {
+      error(mv.val)
+    } else if (_isMVarFull(mv)) {
       success(mv.val)
       notifyMVarEmpty(mv)
     } else {
@@ -177,9 +233,9 @@ exports._takeMVar = function (nonCanceler, mv) {
 
 exports._tryTakeMVar = function (nonCanceler, nothing, just, mv) {
   return function (success, error) {
-    if (mv.error !== undefined) {
-      error(mv.error)
-    } else if (_isFull(mv)) {
+    if (_isMVarKilled(mv)) {
+      error(mv.val)
+    } else if (_isMVarFull(mv)) {
       success(just(mv.val))
       notifyMVarEmpty(mv)
     } else {
@@ -191,10 +247,10 @@ exports._tryTakeMVar = function (nonCanceler, nothing, just, mv) {
 
 exports._readMVar = function (nonCanceler, mv) {
   return function (success, error) {
-    if (mv.error !== undefined) {
-      error(mv.error)
-    } else if (_isFull(mv)) {
-      success(mv._val)
+    if (_isMVarKilled(mv)) {
+      error(mv.val)
+    } else if (_isMVarFull(mv)) {
+      success(mv.val)
     } else {
       _queueWaiter(createAffRec(success, error), mv)
     }
@@ -202,19 +258,11 @@ exports._readMVar = function (nonCanceler, mv) {
   }
 }
 
-function _queueWaiter(waiter, mv) {
-  if (mv.waiters) {
-    mv.waiters.push(waiter)
-  } else {
-    mv.waiters = [waiter]
-  }
-}
-
 exports._putMVar = function (nonCanceler, mv, val) {
   return function (success, error) {
-    if (mv.error !== undefined) {
-      error(mv.error)
-    } else if (_isFull(mv)) {
+    if (_isMVarKilled(mv)) {
+      error(mv.val)
+    } else if (_isMVarFull(mv)) {
       mv.writers.enqueue(createWriter(success, error, val))
     } else {
       notifyMVarFull(mv, val)
@@ -226,9 +274,9 @@ exports._putMVar = function (nonCanceler, mv, val) {
 
 exports._tryPutMVar = function (nonCanceler, mv, val) {
   return function (success, error) {
-    if (mv.error !== undefined) {
-      error(mv.error)
-    } else if (_isFull(mv)) {
+    if (_isMVarKilled(mv)) {
+      error(mv.val)
+    } else if (_isMVarFull(mv)) {
       success(false)
     } else {
       notifyMVarFull(mv, val)
@@ -240,15 +288,16 @@ exports._tryPutMVar = function (nonCanceler, mv, val) {
 
 exports._killMVar = function (nonCanceler, mv, err) {
   return function (success, error) {
-    if (mv.error !== undefined) {
+    if (_isMVarKilled(mv)) {
       error(mv.error)
     } else {
       var readers = mv.readers, writers = mv.writers, waiters = mv.waiters
-      if (waiters) {
-        for (var i = 0, wl = waiters.length; i < wl; i++) {
-          waiters[i].error(err)
+      if (waiters > 0) {
+        for (var i = 0, wl = waiters; i < wl; i++) {
+          mv[i].error(err)
+          mv[i] = undefined
         }
-        mv.waiters = undefined
+        mv.waiters = 0
       }
       // readers
       if (readers) {
@@ -264,8 +313,7 @@ exports._killMVar = function (nonCanceler, mv, err) {
         }
         mv.writer = undefined
       }
-      mv.val = undefined
-      mv.error = err
+      _setMVarKilled(mv, err)
       success()
     }
   }
