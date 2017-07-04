@@ -1,6 +1,6 @@
 'use strict'
 
-const QUEUE_BLOCK_SIZE = 1000
+var QUEUE_BLOCK_SIZE = 1000
 
 function Queue() {
   if (!(this instanceof Queue)) return new Queue()
@@ -94,9 +94,9 @@ Queue.prototype.iter = function () {
   return _queueIterator(this)
 }
 
-const MVAR_EMPTY  = 1 << 0
-const MVAR_FULL   = 1 << 1
-const MVAR_KILLED = 1 << 2
+var MVAR_EMPTY  = 1 << 0
+var MVAR_FULL   = 1 << 1
+var MVAR_KILLED = 1 << 2
 
 function MVar() {
   this.readers = new Queue()
