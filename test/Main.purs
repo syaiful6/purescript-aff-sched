@@ -21,7 +21,6 @@ import Data.Tuple (Tuple(..))
 import Math (abs)
 import Unsafe.Coerce (unsafeCoerce)
 
-import Test.Control.Monad.Aff.MVarTest as MV
 
 type TestEff e = ScheduleEff (console :: CONSOLE, exception :: EXCEPTION | e)
 
@@ -82,5 +81,3 @@ main = void $ runAff throwException (const (pure unit)) $ do
   testAutoUpdate
   liftEff $ log "test reaper module"
   testReaper
-  liftEff $ log "Test MVar"
-  MV.main

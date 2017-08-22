@@ -7,7 +7,7 @@ module Control.Monad.Aff.Schedule.AutoUpdate
 import Prelude
 
 import Control.Monad.Aff (Aff, delay, forkAff)
-import Control.Monad.Aff.MVar (newEmptyMVar, takeMVar, putMVar, readMVar)
+import Control.Monad.Aff.AVar (makeVar, takeVar, putVar, peekVar)
 import Control.Monad.Eff.Ref (newRef, writeRef, readRef)
 import Control.Monad.Eff.Class (liftEff)
 
@@ -45,19 +45,19 @@ mkAutoUpdateHelper
   -> Maybe (a -> Aff (ScheduleEff r) a)
   -> Aff (ScheduleEff r) (Aff (ScheduleEff r) a)
 mkAutoUpdateHelper (UpdateSettings ms action) updateActionModify = do
-  needsRunning <- newEmptyMVar
-  responseVar0 <- newEmptyMVar
+  needsRunning <- makeVar
+  responseVar0 <- makeVar
   currRef <- liftEff $ newRef $ Left responseVar0
   _ <- forkAff do
     let
       loop responseVar maybea = do
-        _ <- takeMVar needsRunning
+        _ <- takeVar needsRunning
         a <- maybe action id (updateActionModify <*> maybea)
         _ <- liftEff $ writeRef currRef $ Right a
-        _ <- putMVar responseVar a
+        _ <- putVar responseVar a
         _ <- delay ms
         -- delay over
-        responseVar' <- newEmptyMVar
+        responseVar' <- makeVar
         _ <- liftEff $ writeRef currRef $ Left responseVar'
         loop responseVar' (Just a)
     loop responseVar0 Nothing
@@ -65,6 +65,6 @@ mkAutoUpdateHelper (UpdateSettings ms action) updateActionModify = do
     mval <- liftEff $ readRef currRef
     case mval of
       Left responseVar -> do
-        _ <- putMVar needsRunning unit
-        readMVar responseVar
+        _ <- putVar needsRunning unit
+        peekVar responseVar
       Right val -> pure val

@@ -1,3 +1,12 @@
+{-
+  This module provides the ability to create reapers: dedicated cleanup `threads`. These
+  `threads` will automatically spawn and die based on the presence of a workload to process on.
+  Example uses:
+  * Killing long-running jobs
+  * Closing unused connections in a connection pool
+  * Pruning a cache of old items
+-}
+
 module Control.Monad.Aff.Schedule.Reaper
   ( ReaperSetting(..)
   , Reaper(..)
@@ -12,28 +21,40 @@ module Control.Monad.Aff.Schedule.Reaper
 import Prelude
 
 import Control.Monad.Aff (Aff, Canceler, cancel, forkAff, delay)
-import Control.Monad.Aff.MVar (MVar, newMVar, withMVar)
+import Control.Monad.Aff.AVar (AVAR, AVar, makeVar', takeVar, putVar)
 import Control.Monad.Eff.Class (liftEff)
 import Control.Monad.Eff.Exception (error)
+import Control.Monad.Error.Class (throwError, catchError)
 import Control.Monad.Eff.Ref (Ref, newRef, writeRef, readRef, modifyRef')
 
 import Data.Time.Duration (Milliseconds)
-import Data.Maybe (Maybe(..))
 import Data.List (List(Nil), (:))
+import Data.Maybe (Maybe(..))
 import Partial (crashWith)
 import Partial.Unsafe (unsafePartial)
 
 import Control.Monad.Aff.Schedule.Effects (ScheduleEff)
 
-
+-- | Settings for creating a reaper, This type has 3 parameters, ```eff``` is effect
+-- | row for reaper action, ```workload``` gives the entire workload, and ```item```
+-- | gives an individual piece of the queue. A common approach is to have ```workload```
+-- | be a list of ```item```.
 newtype ReaperSetting eff workload item = ReaperSetting
   { action :: workload -> Aff eff (workload -> workload)
+  -- ^ The action to perform on a workload. The result of this is a workload modifying
+  -- function. In the common case of using lists, the result should be a difference list
+  -- that prepends the remaining workload to the temporary workload. See ```mkListAction```
   , delay  :: Milliseconds
+  -- ^ delay between calls of 'reaperAction'
   , cons   :: item -> workload -> workload
+  -- ^ Add an item onto a workload.
   , isNull :: workload -> Boolean
+  -- ^ Check if a workload is empty, in which case the worker thread will shut down
   , empty  :: workload
+  -- ^ An empty workload
   }
 
+-- | A data structure to hold reaper APIS.
 newtype Reaper eff workload item = Reaper
   { add  :: item -> Aff eff Unit
   , read :: Aff eff workload
@@ -60,6 +81,9 @@ reaperStop (Reaper { stop }) = stop
 reaperKill :: forall eff workload item. Reaper eff workload item -> Aff eff Unit
 reaperKill (Reaper { kill }) = kill
 
+-- | Create a reaper addition function. This function can be used to add
+-- | new items to the workload. Spawning of reaper threads will be handled
+-- | for you automatically.
 mkReaper
   :: forall eff workload item
    . ReaperSetting (ScheduleEff eff) workload item
@@ -67,7 +91,7 @@ mkReaper
 mkReaper settings@(ReaperSetting rset) = do
   stateRef <- liftEff $ newRef NoReaper
   tidRef   <- liftEff $ newRef Nothing
-  lock     <- newMVar unit
+  lock     <- makeVar' unit
   pure $ Reaper
     { add: addItem lock settings stateRef tidRef
     , read: readState stateRef
@@ -80,7 +104,7 @@ mkReaper settings@(ReaperSetting rset) = do
     case mx of
       NoReaper    -> pure rset.empty
       Workload wl -> pure wl
-  stop lock stateRef = withMVar lock \_ -> do
+  stop lock stateRef = withAVar lock \_ -> do
     liftEff $ modifyRef' stateRef \mx -> case mx of
       NoReaper   -> { state: NoReaper, value: rset.empty }
       Workload x -> { state: Workload rset.empty, value: x }
@@ -92,14 +116,14 @@ mkReaper settings@(ReaperSetting rset) = do
 
 addItem
   :: forall eff workload item
-   . MVar Unit
+   . AVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
   -> item
   -> Aff (ScheduleEff eff) Unit
 addItem lock settings@(ReaperSetting rset) stateRef tidRef item = do
-  next <- withMVar lock \_ -> liftEff $ modifyRef' stateRef cons
+  next <- withAVar lock \_ -> liftEff $ modifyRef' stateRef cons
   next
   where
   cons NoReaper =
@@ -111,7 +135,7 @@ addItem lock settings@(ReaperSetting rset) stateRef tidRef item = do
 
 spawn
   :: forall eff workload item
-   . MVar Unit
+   . AVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
@@ -122,16 +146,16 @@ spawn lock settings stateRef tidRef = do
 
 reaper
   :: forall eff workload item
-   . MVar Unit
+   . AVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
   -> Ref (Maybe (Canceler (ScheduleEff eff)))
   -> Aff (ScheduleEff eff) Unit
 reaper lock settings@(ReaperSetting rec) stateRef tidRef = do
   _     <- delay rec.delay
-  wl    <- withMVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ swapWithEmpty s)
+  wl    <- withAVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ swapWithEmpty s)
   merge <- rec.action wl
-  next  <- withMVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ check merge s)
+  next  <- withAVar lock \_ -> liftEff $ modifyRef' stateRef (\s -> unsafePartial $ check merge s)
   next
   where
   swapWithEmpty :: Partial => State workload -> { state :: State workload, value :: workload }
@@ -164,3 +188,9 @@ mkListAction f = go id
           Nothing -> front
           Just y  -> front <<< (y : _)
     go front' xs
+
+withAVar :: forall e a b. AVar a -> (a -> Aff (avar :: AVAR | e) b) -> Aff (avar :: AVAR | e) b
+withAVar av k = do
+  a <- takeVar av
+  b <- k a `catchError` \e -> putVar av a *> throwError e
+  putVar av a $> b
