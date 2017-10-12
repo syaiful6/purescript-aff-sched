@@ -6,7 +6,7 @@ module Control.Monad.Aff.Schedule.Debounce
 import Prelude
 
 import Control.Monad.Aff (Aff, delay, forkAff)
-import Control.Monad.Aff.AVar (AVAR, makeVar, takeVar, putVar)
+import Control.Monad.Aff.AVar (AVAR, makeEmptyVar, takeVar, putVar)
 import Control.Monad.Rec.Class (forever)
 import Data.Time.Duration (Milliseconds)
 
@@ -23,9 +23,9 @@ debounce
    . DebounceSettings (avar :: AVAR | r)
   -> Aff (avar :: AVAR | r) (Aff (avar :: AVAR | r) Unit)
 debounce (DebounceSettings { frequency, action }) = do
-  baton <- makeVar
+  baton <- makeEmptyVar
   _ <- forkAff $ forever $ do
     _ <- takeVar baton
     _ <- try action
     delay frequency
-  pure $ void $ putVar baton unit
+  pure $ void $ putVar unit baton

@@ -7,11 +7,10 @@
     "output"
   ],
   "dependencies": {
-    "purescript-aff": "^3.1.0",
+    "purescript-aff": "^4.0.0",
     "purescript-refs": "^3.0.0"
   },
   "devDependencies": {
-    "purescript-psci-support": "^3.0.0",
-    "purescript-benchotron": "^6.0.0"
+    "purescript-psci-support": "^3.0.0"
   }
 }

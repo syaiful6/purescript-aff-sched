@@ -20,8 +20,8 @@ module Control.Monad.Aff.Schedule.Reaper
 
 import Prelude
 
-import Control.Monad.Aff (Aff, Canceler, cancel, forkAff, delay)
-import Control.Monad.Aff.AVar (AVAR, AVar, makeVar', takeVar, putVar)
+import Control.Monad.Aff (Aff, Fiber, forkAff, delay, killFiber)
+import Control.Monad.Aff.AVar (AVAR, AVar, makeVar, takeVar, putVar)
 import Control.Monad.Eff.Class (liftEff)
 import Control.Monad.Eff.Exception (error)
 import Control.Monad.Error.Class (throwError, catchError)
@@ -91,7 +91,7 @@ mkReaper
 mkReaper settings@(ReaperSetting rset) = do
   stateRef <- liftEff $ newRef NoReaper
   tidRef   <- liftEff $ newRef Nothing
-  lock     <- makeVar' unit
+  lock     <- makeVar unit
   pure $ Reaper
     { add: addItem lock settings stateRef tidRef
     , read: readState stateRef
@@ -112,14 +112,14 @@ mkReaper settings@(ReaperSetting rset) = do
     v <- liftEff $ readRef tidRef
     case v of
       Nothing -> pure unit
-      Just x  -> cancel x (error "Fail to kill reaper") $> unit
+      Just x  -> killFiber (error "Reap") x
 
 addItem
   :: forall eff workload item
    . AVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
-  -> Ref (Maybe (Canceler (ScheduleEff eff)))
+  -> Ref (Maybe (Fiber (ScheduleEff eff) Unit))
   -> item
   -> Aff (ScheduleEff eff) Unit
 addItem lock settings@(ReaperSetting rset) stateRef tidRef item = do
@@ -138,7 +138,7 @@ spawn
    . AVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
-  -> Ref (Maybe (Canceler (ScheduleEff eff)))
+  -> Ref (Maybe (Fiber (ScheduleEff eff) Unit))
   -> Aff (ScheduleEff eff) Unit
 spawn lock settings stateRef tidRef = do
   canc <- forkAff $ reaper lock settings stateRef tidRef
@@ -149,7 +149,7 @@ reaper
    . AVar Unit
   -> ReaperSetting (ScheduleEff eff) workload item
   -> Ref (State workload)
-  -> Ref (Maybe (Canceler (ScheduleEff eff)))
+  -> Ref (Maybe (Fiber (ScheduleEff eff) Unit))
   -> Aff (ScheduleEff eff) Unit
 reaper lock settings@(ReaperSetting rec) stateRef tidRef = do
   _     <- delay rec.delay
@@ -192,5 +192,5 @@ mkListAction f = go id
 withAVar :: forall e a b. AVar a -> (a -> Aff (avar :: AVAR | e) b) -> Aff (avar :: AVAR | e) b
 withAVar av k = do
   a <- takeVar av
-  b <- k a `catchError` \e -> putVar av a *> throwError e
-  putVar av a $> b
+  b <- k a `catchError` \e -> putVar a av *> throwError e
+  putVar a av $> b

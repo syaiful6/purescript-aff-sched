@@ -14,6 +14,7 @@ import Control.Monad.Aff.Schedule.Reaper (ReaperSetting(..), mkReaper, mkListAct
 
 import Data.Newtype (wrap)
 import Data.List (List(Nil), (..), (:), null)
+import Data.Either (either)
 import Data.Foldable (for_)
 import Data.Traversable (traverse)
 import Data.Maybe (Maybe(..))
@@ -76,7 +77,7 @@ testAutoUpdate = do
     liftEff $ log "someting wrong happened"
 
 main :: forall e. Eff (TestEff e) Unit
-main = void $ runAff throwException (const (pure unit)) $ do
+main = void $ runAff (either throwException (const (pure unit))) $ do
   liftEff $ log "test auto update module"
   testAutoUpdate
   liftEff $ log "test reaper module"
